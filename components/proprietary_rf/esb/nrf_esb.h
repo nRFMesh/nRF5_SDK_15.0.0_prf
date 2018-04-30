@@ -277,6 +277,7 @@ typedef struct
     int8_t  rssi;                                   //!< RSSI for the received packet.
     uint8_t noack;                                  //!< Flag indicating that this packet will not be acknowledgement.
     uint8_t pid;                                    //!< PID assigned during communication.
+    uint8_t control;                                    /**< PID assigned during communication. */
     uint8_t data[NRF_ESB_MAX_PAYLOAD_LENGTH];       //!< The payload data.
 } nrf_esb_payload_t;
 

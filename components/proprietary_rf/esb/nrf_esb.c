@@ -515,6 +515,29 @@ static void ppi_init()
     NRF_PPI->CH[NRF_ESB_PPI_TX_START].TEP    = (uint32_t)&NRF_RADIO->TASKS_TXEN;
 }
 
+uint16_t crc_Fletcher16( uint8_t const *data, uint8_t count )
+{
+	uint16_t sum1 = 0;
+	uint16_t sum2 = 0;
+	int index;
+
+	for( index = 0; index < count; ++index )
+	{
+		sum1 = (sum1 + data[index]) % 255;
+		sum2 = (sum2 + sum1) % 255;
+	}
+
+	return (sum2 << 8) | sum1;
+}
+
+// size(size+data) : data : crc
+void crc_set(uint8_t *data)
+{
+	uint8_t size = data[0];
+	uint16_t crc = crc_Fletcher16(data,size);//check the data without excluding the crc
+	data[size]   = (crc >> 8);
+	data[size+1] = (crc & 0xFF);
+}
 
 static void start_tx_transaction()
 {
@@ -524,6 +547,7 @@ static void start_tx_transaction()
     // Prepare the payload
     mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
 
+    const int8_t header_length = 2;
 
     switch (m_config_local.protocol)
     {
@@ -544,10 +568,12 @@ static void start_tx_transaction()
 
         case NRF_ESB_PROTOCOL_ESB_DPL:
             ack = !mp_current_payload->noack || !m_config_local.selective_auto_ack;
-            m_tx_payload_buffer[0] = mp_current_payload->length;
-            m_tx_payload_buffer[1] = mp_current_payload->pid << 1;
-            m_tx_payload_buffer[1] |= mp_current_payload->noack ? 0x00 : 0x01;
-            memcpy(&m_tx_payload_buffer[2], mp_current_payload->data, mp_current_payload->length);
+            m_tx_payload_buffer[0] = mp_current_payload->length + header_length;
+            m_tx_payload_buffer[1] = mp_current_payload->control;   // 5 ls bit
+            //m_tx_payload_buffer[1] |= ack ? 0x40 : 0x00;        //Home Smart Mesh protocol
+            memcpy(&m_tx_payload_buffer[2], mp_current_payload->data, mp_current_payload->length);//copy payload only
+            
+            crc_set(m_tx_payload_buffer);//will add two bytes of CRC
 
             // Handling ack if noack is set to false or if selective auto ack is turned off
             if (ack)
