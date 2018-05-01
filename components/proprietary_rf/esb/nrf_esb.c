@@ -241,10 +241,10 @@ static ret_code_t apply_address_workarounds()
 static void update_rf_payload_format_esb_dpl(uint32_t payload_length)
 {
 #if (NRF_ESB_MAX_PAYLOAD_LENGTH <= 32)
-    // Using 6 bits for length
+    // modified to be byte alligned with no esb, simple custom HomeSmartMesh protocol
     NRF_RADIO->PCNF0 = (0 << RADIO_PCNF0_S0LEN_Pos) |
-                       (6 << RADIO_PCNF0_LFLEN_Pos) |
-                       (3 << RADIO_PCNF0_S1LEN_Pos) ;
+                       (8 << RADIO_PCNF0_LFLEN_Pos) |
+                       (8 << RADIO_PCNF0_S1LEN_Pos) ;
 #else
     // Using 8 bits for length
     NRF_RADIO->PCNF0 = (0 << RADIO_PCNF0_S0LEN_Pos) |
@@ -477,7 +477,7 @@ static bool rx_fifo_push_rfbuf(uint8_t pipe, uint8_t pid)
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->pipe  = pipe;
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->rssi  = NRF_RADIO->RSSISAMPLE;
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->pid   = pid;
-        m_rx_fifo.p_payload[m_rx_fifo.entry_point]->noack = !(m_rx_payload_buffer[1] & 0x01);
+        //TODO HSM Check ack : m_rx_fifo.p_payload[m_rx_fifo.entry_point]->noack = !(m_rx_payload_buffer[1] & 0x01);
         if (++m_rx_fifo.entry_point >= NRF_ESB_RX_FIFO_SIZE)
         {
             m_rx_fifo.entry_point = 0;
@@ -689,7 +689,7 @@ static void on_radio_disabled_tx_wait_for_ack()
 
         if (m_config_local.protocol != NRF_ESB_PROTOCOL_ESB && m_rx_payload_buffer[0] > 0)
         {
-            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS, m_rx_payload_buffer[1] >> 1))
+            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS, 0))//TODO HSM verify ack
             {
                 m_interrupt_flags |= NRF_ESB_INT_RX_DATA_RECEIVED_MSK;
             }
@@ -785,7 +785,7 @@ static void on_radio_disabled_rx(void)
     p_pipe_info->pid = m_rx_payload_buffer[1] >> 1;
     p_pipe_info->crc = NRF_RADIO->RXCRC;
 
-    if ((m_config_local.selective_auto_ack == false) || ((m_rx_payload_buffer[1] & 0x01) == 1))
+    if (m_config_local.selective_auto_ack == false || ((m_rx_payload_buffer[1] & 0x01) == 0))//TODO CHECK
     {
         ack = true;
     }
@@ -977,6 +977,8 @@ uint32_t nrf_esb_init(nrf_esb_config_t const * p_config)
     NRF_RADIO->BASE1   = 0x43434343;
     NRF_RADIO->PREFIX0 = 0x23C343E7;
     NRF_RADIO->PREFIX1 = 0x13E363A3;
+	
+	//will be overridden by further user's call to set_base_address_X
     
     initialize_fifos();
 
@@ -1104,9 +1106,14 @@ uint32_t nrf_esb_write_payload(nrf_esb_payload_t const * p_payload)
 {
     VERIFY_TRUE(m_esb_initialized, NRF_ERROR_INVALID_STATE);
     VERIFY_PARAM_NOT_NULL(p_payload);
-    VERIFY_PAYLOAD_LENGTH(p_payload);
+    //VERIFY_PAYLOAD_LENGTH(p_payload); - even payload of lentgh 0 is allowed as pid has the info
     VERIFY_FALSE(m_tx_fifo.count >= NRF_ESB_TX_FIFO_SIZE, NRF_ERROR_NO_MEM);
-    VERIFY_TRUE(p_payload->pipe < NRF_ESB_PIPE_COUNT, NRF_ERROR_INVALID_PARAM);
+
+    if (m_config_local.mode == NRF_ESB_MODE_PTX &&
+        p_payload->noack && !m_config_local.selective_auto_ack )
+    {
+        return NRF_ERROR_NOT_SUPPORTED;
+    }
 
     DISABLE_RF_IRQ();
 
@@ -1152,7 +1159,6 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
     p_payload->pipe   = m_rx_fifo.p_payload[m_rx_fifo.exit_point]->pipe;
     p_payload->rssi   = m_rx_fifo.p_payload[m_rx_fifo.exit_point]->rssi;
     p_payload->pid    = m_rx_fifo.p_payload[m_rx_fifo.exit_point]->pid;
-    p_payload->noack  = m_rx_fifo.p_payload[m_rx_fifo.exit_point]->noack; 
     memcpy(p_payload->data, m_rx_fifo.p_payload[m_rx_fifo.exit_point]->data, p_payload->length);
 
     if (++m_rx_fifo.exit_point >= NRF_ESB_RX_FIFO_SIZE)
