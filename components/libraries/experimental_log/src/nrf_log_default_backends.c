@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2014 - 2017, Nordic Semiconductor ASA
+ * Copyright (c) 2017 - 2018, Nordic Semiconductor ASA
  * 
  * All rights reserved.
  * 
@@ -37,52 +37,40 @@
  * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  * 
  */
-#ifndef NRF52_SENSOR_TAG_H
-#define NRF52_SENSOR_TAG_H
 
-//this board design can be found under the $(PROJ_DIR)/pcb folder
+#include "sdk_common.h"
+#if NRF_MODULE_ENABLED(NRF_LOG)
+#include "nrf_log_default_backends.h"
+#include "nrf_log_ctrl.h"
+#include "nrf_log_internal.h"
+#include "nrf_assert.h"
 
-#ifdef __cplusplus
-extern "C" {
+#if defined(NRF_LOG_BACKEND_RTT_ENABLED) && NRF_LOG_BACKEND_RTT_ENABLED
+#include "nrf_log_backend_rtt.h"
+NRF_LOG_BACKEND_RTT_DEF(rtt_log_backend);
 #endif
 
-#include "nrf_gpio.h"
+#if defined(NRF_LOG_BACKEND_UART_ENABLED) && NRF_LOG_BACKEND_UART_ENABLED
+#include "nrf_log_backend_uart.h"
+NRF_LOG_BACKEND_UART_DEF(uart_log_backend);
+#endif
 
-// This LED actually does not exist but the pio can be used for debug
-#define LEDS_NUMBER    1
+void nrf_log_default_backends_init(void)
+{
+    int32_t backend_id = -1;
+    (void)backend_id;
+#if defined(NRF_LOG_BACKEND_RTT_ENABLED) && NRF_LOG_BACKEND_RTT_ENABLED
+    nrf_log_backend_rtt_init();
+    backend_id = nrf_log_backend_add(&rtt_log_backend.backend, NRF_LOG_SEVERITY_DEBUG);
+    ASSERT(backend_id >= 0);
+    nrf_log_backend_enable(&rtt_log_backend.backend);
+#endif
 
-#define LED_START      11
-#define LED_RGB_RED        11
-#define LED_STOP       11
-
-#define LEDS_ACTIVE_STATE 0
-
-#define LEDS_INV_MASK  LEDS_MASK
-
-#define BSP_LED_0 LED_RGB_RED
-
-#define LEDS_LIST { LED_RGB_RED}
-
-#define BUTTONS_NUMBER 0
-
-#define BUTTON_PULL    NRF_GPIO_PIN_PULLUP
-
-#define BUTTONS_ACTIVE_STATE 0
-
-#define BUTTONS_LIST {  }
-
-#define I2C_SCL 29
-#define I2C_SDA 30
-
-#define APDS9960_INT 31
-
-#define RX_PIN_NUMBER  7
-#define TX_PIN_NUMBER  6
-#define HWFC           false
-
-
-#ifdef __cplusplus
+#if defined(NRF_LOG_BACKEND_UART_ENABLED) && NRF_LOG_BACKEND_UART_ENABLED
+    nrf_log_backend_uart_init();
+    backend_id = nrf_log_backend_add(&uart_log_backend.backend, NRF_LOG_SEVERITY_DEBUG);
+    ASSERT(backend_id >= 0);
+    nrf_log_backend_enable(&uart_log_backend.backend);
+#endif
 }
 #endif
-
-#endif /*NRF52_SENSOR_TAG_H*/
