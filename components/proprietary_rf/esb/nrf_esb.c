@@ -537,30 +537,12 @@ static void start_tx_transaction()
     // Prepare the payload
     mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
 
-    //TODO match the nRF52 HW CRC with the SW one on STM32
-    //const int8_t header_length = 2;
-    //const int8_t crc_length = 2;
-
-    //---------------------only Dynamic Payload length left-----------------------
-
     ack = !mp_current_payload->noack || !m_config_local.selective_auto_ack;
-    m_tx_payload_buffer[0] = mp_current_payload->length;//real length ; RF Packet payload length
-    m_tx_payload_buffer[1] = mp_current_payload->control;//RF Payload starts here, S1 is first payload byte
-    m_tx_payload_buffer[2] = mp_current_payload->fid;
-    m_tx_payload_buffer[3] = mp_current_payload->source;
 
-    //this dest is only used in P2P case and would be overwritten by next memcpy if this is a broadcast
-    //whether this is a P2P or Broadcast is encoded in the start_payload which matches the correct use case
-    m_tx_payload_buffer[4] = mp_current_payload->dest;
-
-    memcpy(&m_tx_payload_buffer[mp_current_payload->start_payload],
+    memcpy(&m_tx_payload_buffer[0],
             mp_current_payload->data, 
-            mp_current_payload->length);//copy payload only
+            mp_current_payload->length);
     
-    //The SW CRC is deprecated as it cannot be part of the Length
-    //crc_set(m_tx_payload_buffer);
-    //The length has to be at @ 0, used by NRF_RADIO->PACKETPTR ; And that has to be the real packet length
-
     // Handling ack if noack is set to false or if selective auto ack is turned off
     if (ack)
     {
@@ -804,7 +786,7 @@ static void on_radio_disabled_rx(void)
 
                         update_rf_payload_format(mp_current_payload->length);
                         m_tx_payload_buffer[0] = mp_current_payload->length;
-                        memcpy(&m_tx_payload_buffer[2],
+                        memcpy(&m_tx_payload_buffer[0],
                                mp_current_payload->data,
                                mp_current_payload->length);
                     }
@@ -1139,26 +1121,9 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
     p_payload->length  = p_exit_payload->length;
     p_payload->pipe    = p_exit_payload->pipe;
     p_payload->rssi    = p_exit_payload->rssi;
-    p_payload->control = p_exit_payload->data[1];//buffer starts with Length @ 0
-    p_payload->fid     = p_exit_payload->data[2];
-    p_payload->source  = p_exit_payload->data[3];
-    if(ESB_IS_BROADCAST(p_payload->control))
-    {
-        p_payload->dest = 255;
-        p_payload->start_payload = 4;//MESH_Broadcast_Header_Length
-    }
-    else
-    {
-        p_payload->control = p_exit_payload->data[4];
-        p_payload->start_payload = 5;//MESH_P2P_Header_Length
-    }
-    //copies the user payload only, as the rest was copied by var assignment
-    if(p_payload->length > p_payload->start_payload)
-    {
-        memcpy( p_payload->data + p_payload->start_payload, 
-                p_exit_payload->data + p_payload->start_payload,
-                p_payload->length - p_payload->start_payload);
-    }
+
+    //copies all the buffer
+    memcpy( p_payload->data,p_exit_payload->data,p_payload->length);
 
     if (++m_rx_fifo.exit_point >= NRF_ESB_RX_FIFO_SIZE)
     {
