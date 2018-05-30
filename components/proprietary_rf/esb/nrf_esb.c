@@ -50,8 +50,6 @@
 #include "nrf_log.h"
 #include "nrf_delay.h"
 
-#define ESB_IS_BROADCAST(val) ((val & 0x80) == 0x80)
-
 #define BIT_MASK_UINT_8(x) (0xFF >> (8 - (x)))
 #define NRF_ESB_PIPE_COUNT 8
 
@@ -457,7 +455,7 @@ static bool rx_fifo_push_rfbuf(uint8_t pipe, uint8_t pid)
 
         //copy everything, length included although it is already available on the length param
         memcpy(m_rx_fifo.p_payload[m_rx_fifo.entry_point]->data, &m_rx_payload_buffer[0],
-               m_rx_fifo.p_payload[m_rx_fifo.entry_point]->length);
+               m_rx_fifo.p_payload[m_rx_fifo.entry_point]->length+2);//payload + 2 => payload + length-byte + S0-byte
 
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->pipe  = pipe;
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->rssi  = NRF_RADIO->RSSISAMPLE;
@@ -541,7 +539,7 @@ static void start_tx_transaction()
 
     memcpy(&m_tx_payload_buffer[0],
             mp_current_payload->data, 
-            mp_current_payload->length);
+            mp_current_payload->length+2);//payload + length + S0
     
     // Handling ack if noack is set to false or if selective auto ack is turned off
     if (ack)
@@ -651,7 +649,7 @@ static void on_radio_disabled_tx_wait_for_ack()
 
         if (m_config_local.protocol != NRF_ESB_PROTOCOL_ESB && m_rx_payload_buffer[0] > 0)
         {
-            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS, 0))//TODO HSM verify ack
+            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS, 0))//test if address has pid matching the buffer content
             {
                 m_interrupt_flags |= NRF_ESB_INT_RX_DATA_RECEIVED_MSK;
             }
@@ -736,79 +734,65 @@ static void on_radio_disabled_rx(void)
     }
 
     p_pipe_info = &m_rx_pipe_info[NRF_RADIO->RXMATCH];
-    if (NRF_RADIO->RXCRC             == p_pipe_info->crc &&
+    /*if (NRF_RADIO->RXCRC             == p_pipe_info->crc &&
         (m_rx_payload_buffer[1] >> 1) == p_pipe_info->pid
        )
     {
         retransmit_payload = true;
         send_rx_event = false;
-    }
+    }*/
 
-    p_pipe_info->pid = m_rx_payload_buffer[1] >> 1;
+    p_pipe_info->pid = 0;//TODO remove usage of pid
     p_pipe_info->crc = NRF_RADIO->RXCRC;
 
-    if (m_config_local.selective_auto_ack == false || ((m_rx_payload_buffer[1] & 0x01) == 0))//TODO CHECK
+    /*if (m_config_local.selective_auto_ack == false || ((m_rx_payload_buffer[1] & 0x01) == 0))//TODO CHECK
     {
         ack = true;
-    }
+    }*/
 
     if (ack)
     {
         NRF_RADIO->SHORTS = m_radio_shorts_common | RADIO_SHORTS_DISABLED_RXEN_Msk;
 
-        switch (m_config_local.protocol)
+        //case NRF_ESB_PROTOCOL_ESB_DPL:
+        if (m_tx_fifo.count > 0 &&
+            (m_tx_fifo.p_payload[m_tx_fifo.exit_point]->pipe == NRF_RADIO->RXMATCH)
+            )
         {
-            case NRF_ESB_PROTOCOL_ESB_DPL:
+            // Pipe stays in ACK with payload until TX FIFO is empty
+            // Do not report TX success on first ack payload or retransmit
+            if (p_pipe_info->ack_payload == true && !retransmit_payload)
+            {
+                if (++m_tx_fifo.exit_point >= NRF_ESB_TX_FIFO_SIZE)
                 {
-                    if (m_tx_fifo.count > 0 &&
-                        (m_tx_fifo.p_payload[m_tx_fifo.exit_point]->pipe == NRF_RADIO->RXMATCH)
-                       )
-                    {
-                        // Pipe stays in ACK with payload until TX FIFO is empty
-                        // Do not report TX success on first ack payload or retransmit
-                        if (p_pipe_info->ack_payload == true && !retransmit_payload)
-                        {
-                            if (++m_tx_fifo.exit_point >= NRF_ESB_TX_FIFO_SIZE)
-                            {
-                                m_tx_fifo.exit_point = 0;
-                            }
-
-                            m_tx_fifo.count--;
-
-                            // ACK payloads also require TX_DS
-                            // (page 40 of the 'nRF24LE1_Product_Specification_rev1_6.pdf').
-                            m_interrupt_flags |= NRF_ESB_INT_TX_SUCCESS_MSK;
-                        }
-
-                        p_pipe_info->ack_payload = true;
-
-                        mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
-
-                        update_rf_payload_format(mp_current_payload->length);
-                        m_tx_payload_buffer[0] = mp_current_payload->length;
-                        memcpy(&m_tx_payload_buffer[0],
-                               mp_current_payload->data,
-                               mp_current_payload->length);
-                    }
-                    else
-                    {
-                        p_pipe_info->ack_payload = false;
-                        update_rf_payload_format(0);
-                        m_tx_payload_buffer[0] = 0;
-                    }
-
-                    m_tx_payload_buffer[1] = m_rx_payload_buffer[1];
+                    m_tx_fifo.exit_point = 0;
                 }
-                break;
 
-            case NRF_ESB_PROTOCOL_ESB:
-                {
-                    update_rf_payload_format(0);
-                    m_tx_payload_buffer[0] = m_rx_payload_buffer[0];
-                    m_tx_payload_buffer[1] = 0;
-                }
-                break;
+                m_tx_fifo.count--;
+
+                // ACK payloads also require TX_DS
+                // (page 40 of the 'nRF24LE1_Product_Specification_rev1_6.pdf').
+                m_interrupt_flags |= NRF_ESB_INT_TX_SUCCESS_MSK;
+            }
+
+            p_pipe_info->ack_payload = true;
+
+            mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
+
+            update_rf_payload_format(mp_current_payload->length);
+            m_tx_payload_buffer[0] = mp_current_payload->length;
+            memcpy(&m_tx_payload_buffer[0],
+                    mp_current_payload->data,
+                    mp_current_payload->length+2);//payload + length-byte + S0-byte
         }
+        else
+        {
+            p_pipe_info->ack_payload = false;
+            update_rf_payload_format(0);
+            m_tx_payload_buffer[0] = 0;
+        }
+
+        m_tx_payload_buffer[1] = m_rx_payload_buffer[1];
 
         m_nrf_esb_mainstate = NRF_ESB_STATE_PRX_SEND_ACK;
         NRF_RADIO->TXADDRESS = NRF_RADIO->RXMATCH;
@@ -952,35 +936,35 @@ uint32_t nrf_esb_init(nrf_esb_config_t const * p_config)
     NVIC_SetPriority(ESB_EVT_IRQ, m_config_local.event_irq_priority & ESB_IRQ_PRIORITY_MSK);
     NVIC_EnableIRQ(ESB_EVT_IRQ);
 
-#ifdef NRF52
-    if(m_address_hang_fix_enable)
-    {
-        // Setup a timeout timer to start on an ADDRESS match, and stop on a BCMATCH event.
-        // If the BCMATCH event never occurs the CC[0] event will fire, and the timer interrupt will disable the radio to recover.
-        m_radio_shorts_common |= RADIO_SHORTS_ADDRESS_BCSTART_Msk;
-        NRF_RADIO->BCC = 2;
-        NRF_ESB_BUGFIX_TIMER->BITMODE = TIMER_BITMODE_BITMODE_32Bit << TIMER_BITMODE_BITMODE_Pos;
-        NRF_ESB_BUGFIX_TIMER->PRESCALER = 4;
-        NRF_ESB_BUGFIX_TIMER->CC[0] = 5;
-        NRF_ESB_BUGFIX_TIMER->SHORTS = TIMER_SHORTS_COMPARE0_STOP_Msk | TIMER_SHORTS_COMPARE0_CLEAR_Msk;
-        NRF_ESB_BUGFIX_TIMER->MODE = TIMER_MODE_MODE_Timer << TIMER_MODE_MODE_Pos;
-        NRF_ESB_BUGFIX_TIMER->INTENSET = TIMER_INTENSET_COMPARE0_Msk;
-        NRF_ESB_BUGFIX_TIMER->TASKS_CLEAR = 1;
-        NVIC_SetPriority(NRF_ESB_BUGFIX_TIMER_IRQn, 5);
-        NVIC_EnableIRQ(NRF_ESB_BUGFIX_TIMER_IRQn);
+    #ifdef NRF52
+        if(m_address_hang_fix_enable)
+        {
+            // Setup a timeout timer to start on an ADDRESS match, and stop on a BCMATCH event.
+            // If the BCMATCH event never occurs the CC[0] event will fire, and the timer interrupt will disable the radio to recover.
+            m_radio_shorts_common |= RADIO_SHORTS_ADDRESS_BCSTART_Msk;
+            NRF_RADIO->BCC = 2;
+            NRF_ESB_BUGFIX_TIMER->BITMODE = TIMER_BITMODE_BITMODE_32Bit << TIMER_BITMODE_BITMODE_Pos;
+            NRF_ESB_BUGFIX_TIMER->PRESCALER = 4;
+            NRF_ESB_BUGFIX_TIMER->CC[0] = 5;
+            NRF_ESB_BUGFIX_TIMER->SHORTS = TIMER_SHORTS_COMPARE0_STOP_Msk | TIMER_SHORTS_COMPARE0_CLEAR_Msk;
+            NRF_ESB_BUGFIX_TIMER->MODE = TIMER_MODE_MODE_Timer << TIMER_MODE_MODE_Pos;
+            NRF_ESB_BUGFIX_TIMER->INTENSET = TIMER_INTENSET_COMPARE0_Msk;
+            NRF_ESB_BUGFIX_TIMER->TASKS_CLEAR = 1;
+            NVIC_SetPriority(NRF_ESB_BUGFIX_TIMER_IRQn, 5);
+            NVIC_EnableIRQ(NRF_ESB_BUGFIX_TIMER_IRQn);
 
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX1].EEP = (uint32_t)&NRF_RADIO->EVENTS_ADDRESS;
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX1].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_START;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX1].EEP = (uint32_t)&NRF_RADIO->EVENTS_ADDRESS;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX1].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_START;
 
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX2].EEP = (uint32_t)&NRF_RADIO->EVENTS_BCMATCH;
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX2].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_STOP;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX2].EEP = (uint32_t)&NRF_RADIO->EVENTS_BCMATCH;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX2].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_STOP;
 
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX3].EEP = (uint32_t)&NRF_RADIO->EVENTS_BCMATCH;
-        NRF_PPI->CH[NRF_ESB_PPI_BUGFIX3].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_CLEAR;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX3].EEP = (uint32_t)&NRF_RADIO->EVENTS_BCMATCH;
+            NRF_PPI->CH[NRF_ESB_PPI_BUGFIX3].TEP = (uint32_t)&NRF_ESB_BUGFIX_TIMER->TASKS_CLEAR;
 
-        NRF_PPI->CHENSET = (1 << NRF_ESB_PPI_BUGFIX1) | (1 << NRF_ESB_PPI_BUGFIX2) | (1 << NRF_ESB_PPI_BUGFIX3);
-    }
-#endif
+            NRF_PPI->CHENSET = (1 << NRF_ESB_PPI_BUGFIX1) | (1 << NRF_ESB_PPI_BUGFIX2) | (1 << NRF_ESB_PPI_BUGFIX3);
+        }
+    #endif
 
     m_nrf_esb_mainstate = NRF_ESB_STATE_IDLE;
     m_esb_initialized = true;
@@ -1068,20 +1052,16 @@ uint32_t nrf_esb_write_payload(nrf_esb_payload_t const * p_payload)
 {
     VERIFY_TRUE(m_esb_initialized, NRF_ERROR_INVALID_STATE);
     VERIFY_PARAM_NOT_NULL(p_payload);
-    //VERIFY_PAYLOAD_LENGTH(p_payload); - even payload of lentgh 0 is allowed as pid has the info
+    VERIFY_PAYLOAD_LENGTH(p_payload);//now the payload contains HSM header
     VERIFY_FALSE(m_tx_fifo.count >= NRF_ESB_TX_FIFO_SIZE, NRF_ERROR_NO_MEM);
-
-    if (m_config_local.mode == NRF_ESB_MODE_PTX &&
-        p_payload->noack && !m_config_local.selective_auto_ack )
-    {
-        return NRF_ERROR_NOT_SUPPORTED;
-    }
+    VERIFY_TRUE(p_payload->pipe < NRF_ESB_PIPE_COUNT, NRF_ERROR_INVALID_PARAM);
 
     DISABLE_RF_IRQ();
 
     memcpy(m_tx_fifo.p_payload[m_tx_fifo.entry_point], p_payload, sizeof(nrf_esb_payload_t));
 
-    m_pids[p_payload->pipe] = (m_pids[p_payload->pipe] + 1) % (NRF_ESB_PID_MAX + 1);
+    //pipe is not used frozen to 0
+    m_pids[p_payload->pipe] = m_pids[p_payload->pipe];
     m_tx_fifo.p_payload[m_tx_fifo.entry_point]->pid = m_pids[p_payload->pipe];
 
     if (++m_tx_fifo.entry_point >= NRF_ESB_TX_FIFO_SIZE)
@@ -1123,7 +1103,7 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
     p_payload->rssi    = p_exit_payload->rssi;
 
     //copies all the buffer
-    memcpy( p_payload->data,p_exit_payload->data,p_payload->length);
+    memcpy( p_payload->data,p_exit_payload->data,p_payload->length+2);
 
     if (++m_rx_fifo.exit_point >= NRF_ESB_RX_FIFO_SIZE)
     {
