@@ -415,7 +415,7 @@ static bool rx_fifo_push_rfbuf(uint8_t pipe)
 
         //copy everything, length included although it is already available on the length param
         memcpy(m_rx_fifo.p_payload[m_rx_fifo.entry_point]->data, &m_rx_payload_buffer[0],
-               m_rx_fifo.p_payload[m_rx_fifo.entry_point]->length+2);//payload + 2 => payload + length-byte + S0-byte
+               m_rx_fifo.p_payload[m_rx_fifo.entry_point]->length);
 
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->rssi  = NRF_RADIO->RSSISAMPLE;
         //TODO HSM Check ack : m_rx_fifo.p_payload[m_rx_fifo.entry_point]->noack = !(m_rx_payload_buffer[1] & 0x01);
@@ -469,7 +469,7 @@ static void start_tx_transaction()
 
     memcpy(&m_tx_payload_buffer[0],
             mp_current_payload->data, 
-            mp_current_payload->length+2);//payload + length + S0
+            mp_current_payload->length);
     
     NRF_RADIO->SHORTS   = m_radio_shorts_common;
     NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
@@ -918,8 +918,7 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
     p_payload->pipe    = p_exit_payload->pipe;
     p_payload->rssi    = p_exit_payload->rssi;
 
-    //copies all the buffer
-    memcpy( p_payload->data,p_exit_payload->data,p_payload->length+2);
+    memcpy( p_payload->data,p_exit_payload->data,p_payload->length);
 
     if (++m_rx_fifo.exit_point >= NRF_ESB_RX_FIFO_SIZE)
     {
@@ -977,7 +976,6 @@ uint32_t nrf_esb_start_rx(void)
 
     return NRF_SUCCESS;
 }
-
 
 uint32_t nrf_esb_stop_rx(void)
 {
