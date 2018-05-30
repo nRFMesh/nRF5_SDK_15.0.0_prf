@@ -186,7 +186,6 @@ static uint32_t                     m_radio_shorts_common = _RADIO_SHORTS_COMMON
 // These function pointers are changed dynamically, depending on protocol configuration and state.
 static void (*on_radio_disabled)(void) = 0;
 static void (*on_radio_end)(void) = 0;
-static void (*update_rf_payload_format)(uint32_t payload_length) = 0;
 
 
 // The following functions are assigned to the function pointers above.
@@ -236,7 +235,7 @@ static ret_code_t apply_address_workarounds()
 }
 
 
-static void update_rf_payload_format_esb_dpl(uint32_t payload_length)
+static void update_rf_payload_format_esb_dpl()
 {
     // modified to be byte alligned with no esb, simple custom HomeSmartMesh protocol
     NRF_RADIO->PCNF0 = (0 << RADIO_PCNF0_S0LEN_Pos) |
@@ -248,20 +247,6 @@ static void update_rf_payload_format_esb_dpl(uint32_t payload_length)
                        ((m_esb_addr.addr_length - 1)    << RADIO_PCNF1_BALEN_Pos)   |
                        (0                               << RADIO_PCNF1_STATLEN_Pos) |
                        (NRF_ESB_MAX_PAYLOAD_LENGTH      << RADIO_PCNF1_MAXLEN_Pos);
-}
-
-
-static void update_rf_payload_format_esb(uint32_t payload_length)
-{
-    NRF_RADIO->PCNF0 = (1 << RADIO_PCNF0_S0LEN_Pos) |
-                       (0 << RADIO_PCNF0_LFLEN_Pos) |
-                       (1 << RADIO_PCNF0_S1LEN_Pos);
-
-    NRF_RADIO->PCNF1 = (RADIO_PCNF1_WHITEEN_Disabled    << RADIO_PCNF1_WHITEEN_Pos) |
-                       (RADIO_PCNF1_ENDIAN_Big          << RADIO_PCNF1_ENDIAN_Pos)  |
-                       ((m_esb_addr.addr_length - 1)    << RADIO_PCNF1_BALEN_Pos)   |
-                       (payload_length                  << RADIO_PCNF1_STATLEN_Pos) |
-                       (payload_length                  << RADIO_PCNF1_MAXLEN_Pos);
 }
 
 
@@ -326,26 +311,6 @@ static bool update_radio_bitrate()
 }
 
 
-static bool update_radio_protocol()
-{
-    switch (m_config_local.protocol)
-    {
-        case NRF_ESB_PROTOCOL_ESB_DPL:
-            update_rf_payload_format = update_rf_payload_format_esb_dpl;
-            break;
-
-        case NRF_ESB_PROTOCOL_ESB:
-            update_rf_payload_format = update_rf_payload_format_esb;
-            break;
-
-        default:
-            // Should not be reached
-            return false;
-    }
-    return true;
-}
-
-
 static bool update_radio_crc()
 {
     switch(m_config_local.crc)
@@ -376,9 +341,8 @@ static bool update_radio_parameters()
     bool params_valid = true;
     update_radio_tx_power();
     params_valid &= update_radio_bitrate();
-    params_valid &= update_radio_protocol();
     params_valid &= update_radio_crc();
-    update_rf_payload_format(m_config_local.payload_length);
+    update_rf_payload_format_esb_dpl();
     params_valid &= (m_config_local.retransmit_delay >= NRF_ESB_RETRANSMIT_DELAY_MIN);
     return params_valid;
 }
@@ -612,10 +576,8 @@ static void on_radio_disabled_tx()
     NRF_PPI->CHENCLR            = (1 << NRF_ESB_PPI_TX_START);
     NRF_RADIO->EVENTS_END       = 0;
 
-    if (m_config_local.protocol == NRF_ESB_PROTOCOL_ESB)
-    {
-        update_rf_payload_format(0);
-    }
+
+    update_rf_payload_format_esb_dpl();//TODO update might not be required here
 
     NRF_RADIO->PACKETPTR        = (uint32_t)m_rx_payload_buffer;
     on_radio_disabled           = on_radio_disabled_tx_wait_for_ack;
@@ -679,7 +641,7 @@ static void on_radio_disabled_tx_wait_for_ack()
             // There are still more retransmits left, TX mode should be
             // entered again as soon as the system timer reaches CC[1].
             NRF_RADIO->SHORTS = m_radio_shorts_common | RADIO_SHORTS_DISABLED_RXEN_Msk;
-            update_rf_payload_format(mp_current_payload->length);
+            update_rf_payload_format_esb_dpl();
             NRF_RADIO->PACKETPTR = (uint32_t)m_tx_payload_buffer;
             on_radio_disabled = on_radio_disabled_tx;
             m_nrf_esb_mainstate = NRF_ESB_STATE_PTX_TX_ACK;
@@ -696,7 +658,7 @@ static void on_radio_disabled_tx_wait_for_ack()
 static void clear_events_restart_rx(void)
 {
     NRF_RADIO->SHORTS = m_radio_shorts_common;
-    update_rf_payload_format(m_config_local.payload_length);
+    update_rf_payload_format_esb_dpl();
     NRF_RADIO->PACKETPTR = (uint32_t)m_rx_payload_buffer;
     NRF_RADIO->EVENTS_DISABLED = 0;
     NRF_RADIO->TASKS_DISABLE = 1;
@@ -1182,7 +1144,7 @@ uint32_t nrf_esb_set_address_length(uint8_t length)
     
     m_esb_addr.addr_length = length;
 
-    update_rf_payload_format(m_config_local.payload_length);
+    update_rf_payload_format_esb_dpl();
 
     return NRF_SUCCESS;
 }
