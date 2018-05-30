@@ -172,7 +172,6 @@ static  uint8_t                     m_rx_payload_buffer[NRF_ESB_MAX_PAYLOAD_LENG
 
 // Run time variables
 static volatile uint32_t            m_interrupt_flags = 0;
-static pipe_info_t                  m_rx_pipe_info[NRF_ESB_PIPE_COUNT];
 static volatile uint32_t            m_retransmits_remaining;
 static volatile uint32_t            m_last_tx_attempts;
 static volatile uint32_t            m_wait_for_ack_timeout_us;
@@ -204,14 +203,14 @@ static void on_radio_disabled_rx(void);
 static uint32_t bytewise_bit_swap(uint8_t const * p_inp)
 {
     uint32_t inp = (*(uint32_t*)p_inp);
-#if __CORTEX_M == (0x04U)
-    return __REV((uint32_t)__RBIT(inp)); //lint -esym(628, __rev) -esym(526, __rev) -esym(628, __rbit) -esym(526, __rbit) */
-#else
-    inp = (inp & 0xF0F0F0F0) >> 4 | (inp & 0x0F0F0F0F) << 4;
-    inp = (inp & 0xCCCCCCCC) >> 2 | (inp & 0x33333333) << 2;
-    inp = (inp & 0xAAAAAAAA) >> 1 | (inp & 0x55555555) << 1;
-    return inp;
-#endif
+    #if __CORTEX_M == (0x04U)
+        return __REV((uint32_t)__RBIT(inp)); //lint -esym(628, __rev) -esym(526, __rev) -esym(628, __rbit) -esym(526, __rbit) */
+    #else
+        inp = (inp & 0xF0F0F0F0) >> 4 | (inp & 0x0F0F0F0F) << 4;
+        inp = (inp & 0xCCCCCCCC) >> 2 | (inp & 0x33333333) << 2;
+        inp = (inp & 0xAAAAAAAA) >> 1 | (inp & 0x55555555) << 1;
+        return inp;
+    #endif
 }
 
 
@@ -224,13 +223,13 @@ static uint32_t addr_conv(uint8_t const* p_addr)
 
 static ret_code_t apply_address_workarounds()
 {
-#ifdef NRF52
+    #ifdef NRF52
     //  Set up radio parameters.
     NRF_RADIO->MODECNF0 = (NRF_RADIO->MODECNF0 & ~RADIO_MODECNF0_RU_Msk) | RADIO_MODECNF0_RU_Default << RADIO_MODECNF0_RU_Pos;
 
     // Workaround for nRF52832 Rev 1 Errata 102 and nRF52832 Rev 1 Errata 106. This will reduce sensitivity by 3dB.
     *((volatile uint32_t *)0x40001774) = (*((volatile uint32_t *)0x40001774) & 0xFFFFFFFE) | 0x01000000;
-#endif
+    #endif
     return NRF_SUCCESS;
 }
 
@@ -283,9 +282,9 @@ static bool update_radio_bitrate()
     switch (m_config_local.bitrate)
     {
         case NRF_ESB_BITRATE_2MBPS:
-#ifdef NRF52
-        case NRF_ESB_BITRATE_2MBPS_BLE:
-#endif
+    #ifdef NRF52
+            case NRF_ESB_BITRATE_2MBPS_BLE:
+    #endif
             m_wait_for_ack_timeout_us = RX_WAIT_FOR_ACK_TIMEOUT_US_2MBPS;
             break;
 
@@ -293,11 +292,11 @@ static bool update_radio_bitrate()
             m_wait_for_ack_timeout_us = RX_WAIT_FOR_ACK_TIMEOUT_US_1MBPS;
             break;
 
-#ifdef NRF51
-        case NRF_ESB_BITRATE_250KBPS:
-            m_wait_for_ack_timeout_us = RX_WAIT_FOR_ACK_TIMEOUT_US_250KBPS;
-            break;
-#endif
+    #ifdef NRF51
+            case NRF_ESB_BITRATE_250KBPS:
+                m_wait_for_ack_timeout_us = RX_WAIT_FOR_ACK_TIMEOUT_US_250KBPS;
+                break;
+    #endif
         
         case NRF_ESB_BITRATE_1MBPS_BLE:
             m_wait_for_ack_timeout_us = RX_WAIT_FOR_ACK_TIMEOUT_US_1MBPS_BLE;
@@ -457,30 +456,6 @@ static void ppi_init()
     NRF_PPI->CH[NRF_ESB_PPI_TX_START].TEP    = (uint32_t)&NRF_RADIO->TASKS_TXEN;
 }
 
-uint16_t crc_Fletcher16( uint8_t const *data, uint8_t count )
-{
-	uint16_t sum1 = 0;
-	uint16_t sum2 = 0;
-	int index;
-
-	for( index = 0; index < count; ++index )
-	{
-		sum1 = (sum1 + data[index]) % 255;
-		sum2 = (sum2 + sum1) % 255;
-	}
-
-	return (sum2 << 8) | sum1;
-}
-
-// size(size+data) : data : crc
-void crc_set(uint8_t *data)
-{
-	uint8_t size = data[0];
-	uint16_t crc = crc_Fletcher16(data,size);//check the data without excluding the crc
-	data[size]   = (crc >> 8);
-	data[size+1] = (crc & 0xFF);
-}
-
 /**
  * @brief copies the ESB message structure into the actual buffer that will be pointed upon from the RF HW
  * S0 is not used, so that Length is the very first byte trasnmitted
@@ -488,36 +463,19 @@ void crc_set(uint8_t *data)
  */
 static void start_tx_transaction()
 {
-    bool ack;
-
     m_last_tx_attempts = 1;
     // Prepare the payload
     mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
-
-    ack = !mp_current_payload->noack || !m_config_local.selective_auto_ack;
 
     memcpy(&m_tx_payload_buffer[0],
             mp_current_payload->data, 
             mp_current_payload->length+2);//payload + length + S0
     
-    // Handling ack if noack is set to false or if selective auto ack is turned off
-    if (ack)
-    {
-        NRF_RADIO->SHORTS   = m_radio_shorts_common | RADIO_SHORTS_DISABLED_RXEN_Msk;
-        NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk | RADIO_INTENSET_READY_Msk;
+    NRF_RADIO->SHORTS   = m_radio_shorts_common;
+    NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
+    on_radio_disabled   = on_radio_disabled_tx_noack;
+    m_nrf_esb_mainstate = NRF_ESB_STATE_PTX_TX;
 
-        // Configure the retransmit counter
-        m_retransmits_remaining = m_config_local.retransmit_count;
-        on_radio_disabled = on_radio_disabled_tx;
-        m_nrf_esb_mainstate = NRF_ESB_STATE_PTX_TX_ACK;
-    }
-    else
-    {
-        NRF_RADIO->SHORTS   = m_radio_shorts_common;
-        NRF_RADIO->INTENSET = RADIO_INTENSET_DISABLED_Msk;
-        on_radio_disabled   = on_radio_disabled_tx_noack;
-        m_nrf_esb_mainstate = NRF_ESB_STATE_PTX_TX;
-    }
 
     NRF_RADIO->TXADDRESS    = mp_current_payload->pipe;
     NRF_RADIO->RXADDRESSES  = 1 << mp_current_payload->pipe;
@@ -673,8 +631,6 @@ static void clear_events_restart_rx(void)
 
 static void on_radio_disabled_rx(void)
 {
-    pipe_info_t *   p_pipe_info;
-
     if (NRF_RADIO->CRCSTATUS == 0)
     {
         clear_events_restart_rx();
@@ -686,10 +642,6 @@ static void on_radio_disabled_rx(void)
         clear_events_restart_rx();
         return;
     }
-
-    p_pipe_info = &m_rx_pipe_info[NRF_RADIO->RXMATCH];
-
-    p_pipe_info->crc = NRF_RADIO->RXCRC;
 
     clear_events_restart_rx();
 
@@ -787,8 +739,6 @@ uint32_t nrf_esb_init(nrf_esb_config_t const * p_config)
     
     m_interrupt_flags    = 0;
 
-    memset(m_rx_pipe_info, 0, sizeof(m_rx_pipe_info));
-    
     VERIFY_TRUE(update_radio_parameters(), NRF_ERROR_INVALID_PARAM);
 
     // Configure radio address registers according to ESB default values
@@ -873,8 +823,6 @@ uint32_t nrf_esb_disable(void)
     m_nrf_esb_mainstate = NRF_ESB_STATE_IDLE;
 
     reset_fifos();
-
-    memset(m_rx_pipe_info, 0, sizeof(m_rx_pipe_info));
 
     // Disable the radio
     NVIC_DisableIRQ(ESB_EVT_IRQ);
@@ -986,6 +934,7 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
 }
 
 
+//this function is not being called as start_tx_transaction() is also called from nrf_esb_write_payload()
 uint32_t nrf_esb_start_tx(void)
 {
     VERIFY_TRUE(m_nrf_esb_mainstate == NRF_ESB_STATE_IDLE, NRF_ERROR_BUSY);
@@ -1093,8 +1042,6 @@ uint32_t nrf_esb_flush_rx(void)
     m_rx_fifo.count = 0;
     m_rx_fifo.entry_point = 0;
     m_rx_fifo.exit_point = 0;
-
-    memset(m_rx_pipe_info, 0, sizeof(m_rx_pipe_info));
 
     ENABLE_RF_IRQ();
 
