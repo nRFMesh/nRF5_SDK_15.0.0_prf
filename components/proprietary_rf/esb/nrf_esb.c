@@ -172,7 +172,6 @@ static  uint8_t                     m_rx_payload_buffer[NRF_ESB_MAX_PAYLOAD_LENG
 
 // Run time variables
 static volatile uint32_t            m_interrupt_flags = 0;
-static uint8_t                      m_pids[NRF_ESB_PIPE_COUNT];
 static pipe_info_t                  m_rx_pipe_info[NRF_ESB_PIPE_COUNT];
 static volatile uint32_t            m_retransmits_remaining;
 static volatile uint32_t            m_last_tx_attempts;
@@ -195,7 +194,6 @@ static void on_radio_disabled_tx_noack(void);
 static void on_radio_disabled_tx(void);
 static void on_radio_disabled_tx_wait_for_ack(void);
 static void on_radio_disabled_rx(void);
-static void on_radio_disabled_rx_ack(void);
 
 
 #define NRF_ESB_ADDR_UPDATE_MASK_BASE0          (1 << 0)    /*< Mask value to signal updating BASE0 radio address. */
@@ -437,12 +435,11 @@ static void tx_fifo_remove_last()
  *  the RX FIFO.
  *
  *  @param  pipe Pipe number to set for the packet.
- *  @param  pid  Packet ID.
  *
  *  @retval true   Operation successful.
  *  @retval false  Operation failed.
  */
-static bool rx_fifo_push_rfbuf(uint8_t pipe, uint8_t pid)
+static bool rx_fifo_push_rfbuf(uint8_t pipe)
 {
     if (m_rx_fifo.count < NRF_ESB_RX_FIFO_SIZE)
     {
@@ -457,9 +454,7 @@ static bool rx_fifo_push_rfbuf(uint8_t pipe, uint8_t pid)
         memcpy(m_rx_fifo.p_payload[m_rx_fifo.entry_point]->data, &m_rx_payload_buffer[0],
                m_rx_fifo.p_payload[m_rx_fifo.entry_point]->length+2);//payload + 2 => payload + length-byte + S0-byte
 
-        m_rx_fifo.p_payload[m_rx_fifo.entry_point]->pipe  = pipe;
         m_rx_fifo.p_payload[m_rx_fifo.entry_point]->rssi  = NRF_RADIO->RSSISAMPLE;
-        m_rx_fifo.p_payload[m_rx_fifo.entry_point]->pid   = pid;
         //TODO HSM Check ack : m_rx_fifo.p_payload[m_rx_fifo.entry_point]->noack = !(m_rx_payload_buffer[1] & 0x01);
         if (++m_rx_fifo.entry_point >= NRF_ESB_RX_FIFO_SIZE)
         {
@@ -649,7 +644,7 @@ static void on_radio_disabled_tx_wait_for_ack()
 
         if (m_config_local.protocol != NRF_ESB_PROTOCOL_ESB && m_rx_payload_buffer[0] > 0)
         {
-            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS, 0))//test if address has pid matching the buffer content
+            if (rx_fifo_push_rfbuf((uint8_t)NRF_RADIO->TXADDRESS))
             {
                 m_interrupt_flags |= NRF_ESB_INT_RX_DATA_RECEIVED_MSK;
             }
@@ -716,9 +711,6 @@ static void clear_events_restart_rx(void)
 
 static void on_radio_disabled_rx(void)
 {
-    bool            ack                = false;
-    bool            retransmit_payload = false;
-    bool            send_rx_event      = true;
     pipe_info_t *   p_pipe_info;
 
     if (NRF_RADIO->CRCSTATUS == 0)
@@ -734,98 +726,18 @@ static void on_radio_disabled_rx(void)
     }
 
     p_pipe_info = &m_rx_pipe_info[NRF_RADIO->RXMATCH];
-    /*if (NRF_RADIO->RXCRC             == p_pipe_info->crc &&
-        (m_rx_payload_buffer[1] >> 1) == p_pipe_info->pid
-       )
-    {
-        retransmit_payload = true;
-        send_rx_event = false;
-    }*/
 
-    p_pipe_info->pid = 0;//TODO remove usage of pid
     p_pipe_info->crc = NRF_RADIO->RXCRC;
 
-    /*if (m_config_local.selective_auto_ack == false || ((m_rx_payload_buffer[1] & 0x01) == 0))//TODO CHECK
+    clear_events_restart_rx();
+
+    // Push the new packet to the RX buffer and trigger a received event if the operation was
+    // successful.
+    if (rx_fifo_push_rfbuf(NRF_RADIO->RXMATCH))
     {
-        ack = true;
-    }*/
-
-    if (ack)
-    {
-        NRF_RADIO->SHORTS = m_radio_shorts_common | RADIO_SHORTS_DISABLED_RXEN_Msk;
-
-        //case NRF_ESB_PROTOCOL_ESB_DPL:
-        if (m_tx_fifo.count > 0 &&
-            (m_tx_fifo.p_payload[m_tx_fifo.exit_point]->pipe == NRF_RADIO->RXMATCH)
-            )
-        {
-            // Pipe stays in ACK with payload until TX FIFO is empty
-            // Do not report TX success on first ack payload or retransmit
-            if (p_pipe_info->ack_payload == true && !retransmit_payload)
-            {
-                if (++m_tx_fifo.exit_point >= NRF_ESB_TX_FIFO_SIZE)
-                {
-                    m_tx_fifo.exit_point = 0;
-                }
-
-                m_tx_fifo.count--;
-
-                // ACK payloads also require TX_DS
-                // (page 40 of the 'nRF24LE1_Product_Specification_rev1_6.pdf').
-                m_interrupt_flags |= NRF_ESB_INT_TX_SUCCESS_MSK;
-            }
-
-            p_pipe_info->ack_payload = true;
-
-            mp_current_payload = m_tx_fifo.p_payload[m_tx_fifo.exit_point];
-
-            update_rf_payload_format(mp_current_payload->length);
-            m_tx_payload_buffer[0] = mp_current_payload->length;
-            memcpy(&m_tx_payload_buffer[0],
-                    mp_current_payload->data,
-                    mp_current_payload->length+2);//payload + length-byte + S0-byte
-        }
-        else
-        {
-            p_pipe_info->ack_payload = false;
-            update_rf_payload_format(0);
-            m_tx_payload_buffer[0] = 0;
-        }
-
-        m_tx_payload_buffer[1] = m_rx_payload_buffer[1];
-
-        m_nrf_esb_mainstate = NRF_ESB_STATE_PRX_SEND_ACK;
-        NRF_RADIO->TXADDRESS = NRF_RADIO->RXMATCH;
-        NRF_RADIO->PACKETPTR = (uint32_t)m_tx_payload_buffer;
-        on_radio_disabled = on_radio_disabled_rx_ack;
+        m_interrupt_flags |= NRF_ESB_INT_RX_DATA_RECEIVED_MSK;
+        NVIC_SetPendingIRQ(ESB_EVT_IRQ);
     }
-    else
-    {
-        clear_events_restart_rx();
-    }
-
-    if (send_rx_event)
-    {
-        // Push the new packet to the RX buffer and trigger a received event if the operation was
-        // successful.
-        if (rx_fifo_push_rfbuf(NRF_RADIO->RXMATCH, p_pipe_info->pid))
-        {
-            m_interrupt_flags |= NRF_ESB_INT_RX_DATA_RECEIVED_MSK;
-            NVIC_SetPendingIRQ(ESB_EVT_IRQ);
-        }
-    }
-}
-
-
-static void on_radio_disabled_rx_ack(void)
-{
-    NRF_RADIO->SHORTS = m_radio_shorts_common | RADIO_SHORTS_DISABLED_TXEN_Msk;
-    update_rf_payload_format(m_config_local.payload_length);
-
-    NRF_RADIO->PACKETPTR = (uint32_t)m_rx_payload_buffer;
-    on_radio_disabled = on_radio_disabled_rx;
-
-    m_nrf_esb_mainstate = NRF_ESB_STATE_PRX;
 }
 
 
@@ -914,8 +826,7 @@ uint32_t nrf_esb_init(nrf_esb_config_t const * p_config)
     m_interrupt_flags    = 0;
 
     memset(m_rx_pipe_info, 0, sizeof(m_rx_pipe_info));
-    memset(m_pids, 0, sizeof(m_pids));
-
+    
     VERIFY_TRUE(update_radio_parameters(), NRF_ERROR_INVALID_PARAM);
 
     // Configure radio address registers according to ESB default values
@@ -1002,7 +913,6 @@ uint32_t nrf_esb_disable(void)
     reset_fifos();
 
     memset(m_rx_pipe_info, 0, sizeof(m_rx_pipe_info));
-    memset(m_pids, 0, sizeof(m_pids));
 
     // Disable the radio
     NVIC_DisableIRQ(ESB_EVT_IRQ);
@@ -1059,10 +969,6 @@ uint32_t nrf_esb_write_payload(nrf_esb_payload_t const * p_payload)
     DISABLE_RF_IRQ();
 
     memcpy(m_tx_fifo.p_payload[m_tx_fifo.entry_point], p_payload, sizeof(nrf_esb_payload_t));
-
-    //pipe is not used frozen to 0
-    m_pids[p_payload->pipe] = m_pids[p_payload->pipe];
-    m_tx_fifo.p_payload[m_tx_fifo.entry_point]->pid = m_pids[p_payload->pipe];
 
     if (++m_tx_fifo.entry_point >= NRF_ESB_TX_FIFO_SIZE)
     {
@@ -1556,7 +1462,6 @@ uint32_t nrf_esb_reuse_pid(uint8_t pipe)
     VERIFY_TRUE(m_nrf_esb_mainstate == NRF_ESB_STATE_IDLE, NRF_ERROR_BUSY);
     VERIFY_TRUE(pipe < 8, NRF_ERROR_INVALID_PARAM);
 
-    m_pids[pipe] = (m_pids[pipe] + NRF_ESB_PID_MAX) % (NRF_ESB_PID_MAX + 1);
     return NRF_SUCCESS;
 }
 
