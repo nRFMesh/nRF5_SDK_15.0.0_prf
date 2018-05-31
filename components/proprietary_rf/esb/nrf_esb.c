@@ -890,8 +890,7 @@ uint32_t nrf_esb_write_payload(nrf_esb_payload_t const * p_payload)
     ENABLE_RF_IRQ();
 
 
-    if (m_config_local.mode == NRF_ESB_MODE_PTX &&
-        m_config_local.tx_mode == NRF_ESB_TXMODE_AUTO &&
+    if (m_config_local.tx_mode == NRF_ESB_TXMODE_AUTO &&
         m_nrf_esb_mainstate == NRF_ESB_STATE_IDLE)
     {
         start_tx_transaction();
@@ -932,8 +931,12 @@ uint32_t nrf_esb_read_rx_payload(nrf_esb_payload_t * p_payload)
     return NRF_SUCCESS;
 }
 
-
-//this function is not being called as start_tx_transaction() is also called from nrf_esb_write_payload()
+/**
+ * @brief this function is not being called as start_tx_transaction() is also called from nrf_esb_write_payload()
+ * this function is to be used in the manual mode NRF_ESB_TXMODE_MANUAL
+ * 
+ * @return uint32_t NRF_SUCCESS
+ */
 uint32_t nrf_esb_start_tx(void)
 {
     VERIFY_TRUE(m_nrf_esb_mainstate == NRF_ESB_STATE_IDLE, NRF_ERROR_BUSY);
