@@ -83,7 +83,7 @@ extern "C" {
 
 // Hardcoded parameters - change if necessary
 #ifndef NRF_ESB_MAX_PAYLOAD_LENGTH
-#define     NRF_ESB_MAX_PAYLOAD_LENGTH          32                  //!< The maximum size of the payload. Valid values are 1 to 252.
+#define     NRF_ESB_MAX_PAYLOAD_LENGTH          40                  //!< The maximum size of the payload. Valid values are 1 to 252.
 #endif
 
 #define     NRF_ESB_TX_FIFO_SIZE                8                   //!< The size of the transmission first-in, first-out buffer.
