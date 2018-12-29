@@ -63,11 +63,17 @@ extern "C" {
  * @brief If NRF_ESB_DEBUG is defined, these GPIO pins can be used for debug timing.
  */
 
+#ifndef NRF52840_XXAA
 #define DEBUGPIN1   12 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every radio interrupt.
 #define DEBUGPIN2   13 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every NRF_RADIO->EVENTS_END.
 #define DEBUGPIN3   14 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every NRF_RADIO->EVENTS_DISABLED.
 #define DEBUGPIN4   15 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set when the radio is set to start transmission.
-
+#else
+#define DEBUGPIN1   13 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every radio interrupt.
+#define DEBUGPIN2   15 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every NRF_RADIO->EVENTS_END.
+#define DEBUGPIN3   17 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set with every NRF_RADIO->EVENTS_DISABLED.
+#define DEBUGPIN4   20 //!< If NRF_ESB_DEBUG is defined, this GPIO pin is set when the radio is set to start transmission.
+#endif
 
 #ifdef  NRF_ESB_DEBUG
 #define DEBUG_PIN_SET(a)    (NRF_GPIO->OUTSET = (1 << (a))) //!< Used internally to set debug pins.
@@ -101,9 +107,8 @@ STATIC_ASSERT(NRF_ESB_MAX_PAYLOAD_LENGTH <= 252);
 #define     NRF_ESB_PPI_TX_START                13                  //!< The PPI channel used for starting TX.
 
 /**@cond NO_DOXYGEN */
-
+#ifdef NRF52832_XXAA
 // nRF52 address fix timer and PPI defines
-#ifdef NRF52
 #define     NRF_ESB_PPI_BUGFIX1                 9
 #define     NRF_ESB_PPI_BUGFIX2                 8
 #define     NRF_ESB_PPI_BUGFIX3                 7
@@ -216,9 +221,11 @@ typedef enum {
 typedef enum {
     NRF_ESB_BITRATE_2MBPS     = RADIO_MODE_MODE_Nrf_2Mbit,      /**< 2 Mb radio mode.                                                */
     NRF_ESB_BITRATE_1MBPS     = RADIO_MODE_MODE_Nrf_1Mbit,      /**< 1 Mb radio mode.                                                */
+#if !(defined(NRF52840_XXAA) || defined(NRF52810_XXAA))
     NRF_ESB_BITRATE_250KBPS   = RADIO_MODE_MODE_Nrf_250Kbit,    /**< 250 Kb radio mode.                                              */
+#endif //NRF52840_XXAA
     NRF_ESB_BITRATE_1MBPS_BLE = RADIO_MODE_MODE_Ble_1Mbit,      /**< 1 Mb radio mode using @e Bluetooth low energy radio parameters. */
-#if defined(NRF52)
+#if defined(NRF52_SERIES)
     NRF_ESB_BITRATE_2MBPS_BLE = 4                               /**< 2 Mb radio mode using @e Bluetooth low energy radio parameters. */
 #endif
 } nrf_esb_bitrate_t;
@@ -244,7 +251,8 @@ typedef enum {
     NRF_ESB_TX_POWER_NEG12DBM = RADIO_TXPOWER_TXPOWER_Neg12dBm, /**< -12 dBm radio transmit power. */
     NRF_ESB_TX_POWER_NEG16DBM = RADIO_TXPOWER_TXPOWER_Neg16dBm, /**< -16 dBm radio transmit power. */
     NRF_ESB_TX_POWER_NEG20DBM = RADIO_TXPOWER_TXPOWER_Neg20dBm, /**< -20 dBm radio transmit power. */
-    NRF_ESB_TX_POWER_NEG30DBM = RADIO_TXPOWER_TXPOWER_Neg30dBm  /**< -30 dBm radio transmit power. */
+    NRF_ESB_TX_POWER_NEG30DBM = RADIO_TXPOWER_TXPOWER_Neg30dBm, /**< -30 dBm radio transmit power. */
+    NRF_ESB_TX_POWER_NEG40DBM = RADIO_TXPOWER_TXPOWER_Neg40dBm  /**< -40 dBm radio transmit power. */
 } nrf_esb_tx_power_t;
 
 
@@ -316,7 +324,7 @@ typedef struct
     uint8_t                 event_irq_priority;     //!< ESB event interrupt priority.
     uint8_t                 payload_length;         //!< Length of the payload (maximum length depends on the platforms that are used on each side).
 
-    bool                    selective_auto_ack;     //!< Enable or disable selective auto acknowledgement.
+    bool                    selective_auto_ack;     //!< Enable or disable selective auto acknowledgement. When this feature is disabled, all packets will be acknowledged ignoring the noack field.
 } nrf_esb_config_t;
 
 
@@ -372,7 +380,6 @@ bool nrf_esb_is_idle(void);
  * @retval  NRF_SUCCESS                     If the payload was successfully queued for writing.
  * @retval  NRF_ERROR_NULL                  If the required parameter was NULL.
  * @retval  NRF_INVALID_STATE               If the module is not initialized.
- * @retval  NRF_ERROR_NOT_SUPPORTED         If @p p_payload->noack was false, but selective acknowledgement is not enabled.
  * @retval  NRF_ERROR_NO_MEM                If the TX FIFO is full.
  * @retval  NRF_ERROR_INVALID_LENGTH        If the payload length was invalid (zero or larger than the allowed maximum).
  */
@@ -425,7 +432,9 @@ uint32_t nrf_esb_stop_rx(void);
 uint32_t nrf_esb_flush_tx(void);
 
 
-/**@brief Function for removing the first item from the TX buffer.
+/**@brief Function for removing the newest entry from the TX buffer.
+ *
+ * This function will remove the most recently added element from the FIFO queue.
  *
  * @retval  NRF_SUCCESS                     If the operation completed successfully.
  * @retval  NRF_INVALID_STATE               If the module is not initialized.
